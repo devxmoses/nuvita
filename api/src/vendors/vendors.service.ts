@@ -36,13 +36,16 @@ export class VendorsService {
   async findAll(query:FindVendorsQueryDto) {
     const { page, limit, sortBy, order } = query;
 
+    const where = {isApproved:true};
+
     const [data, total] = await this.prisma.$transaction([
       this.prisma.vendor.findMany({
+        where,
         orderBy:{[sortBy]:order},
         skip:(page-1)*limit,
         take:limit,
       }),
-      this.prisma.vendor.count(),
+      this.prisma.vendor.count({where}),
     ]);
 
     return paginate (data, total, page,limit);
@@ -53,6 +56,32 @@ export class VendorsService {
     if(!vendor) throw new NotFoundException(`Vendor with ID ${id} not found`)
     return vendor;
 
+  }
+
+  findPending(){
+    return this.prisma.vendor.findMany({
+      where:{isApproved:false},
+      orderBy:{createdAt:'asc'},
+      include:{owner:{select:{id:true, name:true, email:true}}},
+    });
+  }
+
+  async approve(id:string){
+    const vendor = await this.findOne(id);
+    if(vendor.isApproved) return vendor;
+
+    return this.prisma.vendor.update({
+      where:{id},
+      data:{isApproved:true, approvedAt:new Date()},
+    });
+  }
+
+  async revokeApproval(id:string){
+    await this.findOne(id);
+    return this.prisma.vendor.update({
+      where:{id},
+      data:{isApproved:false, approvedAt:null},
+    });
   }
 
   async update(id: string, updateVendorDto: UpdateVendorDto) {

@@ -27,9 +27,9 @@ describe('OrdersController', () => {
   afterEach(() => jest.clearAllMocks());
 
   it('checks out as the authenticated user', async () => {
-    await controller.create(asRequest('user-1'));
+    await controller.create(asRequest('user-1'), { shippingAddressId: 'addr1' });
 
-    expect(service.create).toHaveBeenCalledWith('user-1');
+    expect(service.create).toHaveBeenCalledWith('user-1', { shippingAddressId: 'addr1' });
   });
 
   it('lists only the authenticated user own orders', async () => {

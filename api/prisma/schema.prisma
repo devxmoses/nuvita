@@ -25,6 +25,7 @@ model User {
   orders           Order[]
   cart             Cart?
   reviews          Review[]
+  addresses        Address[]
   suggestedSpecies Species[]
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
@@ -40,28 +41,37 @@ model RefreshToken {
 }
 
 model Vendor {
-  id          String      @id @default(cuid())
-  name        String
-  slug        String      @unique
-  description String?
-  ownerId     String
-  owner       User        @relation(fields: [ownerId], references: [id])
-  products    Product[]
-  orderItems  OrderItem[]
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id            String         @id @default(cuid())
+  name          String
+  slug          String         @unique
+  description   String?
+  ownerId       String
+  owner         User           @relation(fields: [ownerId], references: [id])
+  isApproved    Boolean        @default(false)
+  approvedAt  DateTime?
+  products      Product[]
+  orderItems    OrderItem[]
+  vendorOrders  VendorOrder[]
+  deliveryZones DeliveryZone[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([isApproved])
 }
 
 model Category {
   id        String     @id @default(cuid())
   name      String
   slug      String     @unique
+  segments  Segment[]
   parentId  String?
   parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children  Category[] @relation("CategoryHierarchy")
   products  Product[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+
+  @@index([segments(ops: ArrayOps)], type: Gin)
 }
 
 enum Segment {
@@ -89,27 +99,46 @@ model Species {
 }
 
 model Product {
-  id          String      @id @default(cuid())
+  id          String           @id @default(cuid())
   name        String
   slug        String
   description String?
   price       Int
-  stock       Int         @default(0)
-  isActive    Boolean     @default(true)
+  stock       Int              @default(0)
+  isActive    Boolean          @default(true)
   segments    Segment[]
   species     Species[]
   vendorId    String
-  vendor      Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendor      Vendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   categoryId  String?
-  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category    Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   orderItems  OrderItem[]
+  variants    ProductVariant[]
   cartItems   CartItem[]
   reviews     Review[]
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   @@unique([vendorId, slug])
   @@index([segments(ops: ArrayOps)], type: Gin)
+}
+
+model ProductVariant {
+  id         String      @id @default(cuid())
+  productId  String
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name       String
+  sku        String?     @unique
+  price      Int
+  stock      Int         @default(0)
+  isActive   Boolean     @default(true)
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@unique([productId, name])
+  @@index([productId])
 }
 
 enum OrderStatus {
@@ -121,29 +150,69 @@ enum OrderStatus {
 }
 
 model Order {
-  id        String      @id @default(cuid())
-  buyerId   String
-  buyer     User        @relation(fields: [buyerId], references: [id])
-  status    OrderStatus @default(PENDING)
-  total     Int
-  items     OrderItem[]
-  payments  Payment[]
-  createdAt DateTime    @default(now())
-  updated   DateTime    @updatedAt
+  id                String        @id @default(cuid())
+  buyerId           String
+  buyer             User          @relation(fields: [buyerId], references: [id])
+  status            OrderStatus   @default(PENDING)
+  itemsTotal        Int           @default(0)
+  deliveryTotal     Int           @default(0)
+  total             Int
+  shippingAddressId String?
+  shippingAddress   Address?      @relation(fields: [shippingAddressId], references: [id], onDelete: SetNull)
+  shippingSnapshot  Json?
+  items             OrderItem[]
+  vendorOrders      VendorOrder[]
+  payments          Payment[]
+  createdAt         DateTime      @default(now())
+  updated           DateTime      @updatedAt
+
+  @@index([buyerId, status])
+}
+
+enum VendorOrderStatus {
+  PENDING
+  ACCEPTED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model VendorOrder {
+  id          String            @id @default(cuid())
+  orderId     String
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  vendorId    String
+  vendor      Vendor            @relation(fields: [vendorId], references: [id])
+  status      VendorOrderStatus @default(PENDING)
+  subtotal    Int
+  deliveryFee Int               @default(0)
+  items       OrderItem[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([orderId, vendorId])
+  @@index([vendorId, status])
 }
 
 model OrderItem {
-  id          String   @id @default(cuid())
-  orderId     String
-  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
-  vendorId    String
-  vendor      Vendor   @relation(fields: [vendorId], references: [id])
-  productName String
-  quantity    Int
-  unitPrice   Int
-  createdAt   DateTime @default(now())
+  id            String          @id @default(cuid())
+  orderId       String
+  order         Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  vendorId      String
+  vendor        Vendor          @relation(fields: [vendorId], references: [id])
+  variantId     String?
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  vendorOrderId String?
+  vendorOrder   VendorOrder?    @relation(fields: [vendorOrderId], references: [id], onDelete: SetNull)
+  productName   String
+  variantName   String?
+  quantity      Int
+  unitPrice     Int
+  createdAt     DateTime        @default(now())
+
+  @@index([vendorOrderId])
 }
 
 model Cart {
@@ -156,16 +225,19 @@ model Cart {
 }
 
 model CartItem {
-  id        String   @id @default(cuid())
-  cartId    String
-  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  quantity  Int
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([cartId, productId])
+  id               String          @id @default(cuid())
+  cartId           String
+  cart             Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId        String?
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  quantity         Int
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  
+  @@index([cartId])
+  @@index([productId])
 }
 
 model Review {
@@ -180,6 +252,44 @@ model Review {
   updatedAt DateTime @updatedAt
 
   @@unique([productId, authorId])
+}
+
+model Address {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String?
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  postalCode String?
+  country    String   @default("NG")
+  phone      String?
+  isDefault  Boolean  @default(false)
+  orders     Order[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Where a vendor delivers, and what it charges there
+model DeliveryZone {
+  id        String   @id @default(cuid())
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  name      String
+  country   String   @default("NG")
+  state     String?
+  city      String?
+  fee       Int      @default(0)
+  freeAbove Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId, isActive])
 }
 
 enum PaymentStatus {

@@ -16,7 +16,9 @@ import { PaymentsModule } from './payments/payments.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AdminModule } from './admin/admin.module';
 import { SpeciesModule } from './species/species.module';
-
+import { ProductVariantsModule } from './product-variants/product-variants.module';
+import { AddressesModule } from './addresses/addresses.module';
+import { DeliveryZonesModule } from './delivery-zones/delivery-zones.module';
 
 
 @Module({
@@ -41,7 +43,10 @@ import { SpeciesModule } from './species/species.module';
     ReviewsModule,
     PaymentsModule,
     AdminModule,
-    SpeciesModule
+    SpeciesModule,
+    ProductVariantsModule,
+    AddressesModule,
+    DeliveryZonesModule
   ],
   controllers: [AppController],
   providers: [

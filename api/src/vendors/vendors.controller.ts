@@ -6,6 +6,10 @@ import { UpdateVendorDto } from './dto/update-vendor.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VendorOwnerOrAdminGuard } from './guards/vendor-owner-or-admin.guard';
 import { FindVendorsQueryDto } from './dto/find-vendors-query.dto';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { Role } from '../auth/enums/role.enum';
+
 
 @ApiTags('vendors')
 @Controller('vendors')
@@ -29,6 +33,18 @@ export class VendorsController {
     return this.vendorsService.findAll(query);
   }
 
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Vendors awaiting approval (admin only)' })
+  @ApiResponse({ status: 403, description: 'Admins only' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  @Get('pending')
+  findPending() {
+    return this.vendorsService.findPending();
+  }
+
+
+
   @ApiOperation({ summary: 'Get a single vendor by ID' })
   @ApiParam({ name: 'id' })
   @ApiResponse({ status: 200, description: 'The vendor' })
@@ -37,6 +53,30 @@ export class VendorsController {
   findOne(@Param('id') id: string) {
     return this.vendorsService.findOne(id);
   }
+
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Approve a vendor, making it and its products public (admin only)' })
+  @ApiParam({ name: 'id' })
+  @ApiResponse({ status: 200, description: 'The approved vendor' })
+  @ApiResponse({ status: 403, description: 'Admins only' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  @Patch(':id/approve')
+  approve(@Param('id') id: string) {
+    return this.vendorsService.approve(id);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke a vendor approval, hiding it from the catalogue (admin only)' })
+  @ApiParam({ name: 'id' })
+  @ApiResponse({ status: 403, description: 'Admins only' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  @Patch(':id/revoke')
+  revoke(@Param('id') id: string) {
+    return this.vendorsService.revokeApproval(id);
+  }
+
 
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update a vendor you own' })

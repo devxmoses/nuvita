@@ -3,10 +3,13 @@ import { NotFoundException } from '@nestjs/common';
 import { VendorsService } from './vendors.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FindVendorsQueryDto } from './dto/find-vendors-query.dto';
+import { cacheServiceMock, eventEmitterMock, infraProviders } from '../common/testing/infra-test-providers';
 
 describe('VendorsService', () => {
   let service: VendorsService;
   let prisma: any;
+  let cache: ReturnType<typeof cacheServiceMock>;
+  let events: ReturnType<typeof eventEmitterMock>;
   let tx: { vendor: Record<string, jest.Mock>; user: Record<string, jest.Mock> };
 
   const VENDOR = { id: 'v1', name: 'Green Valley Nutrition', slug: 'green-valley-nutrition', ownerId: 'u1' };
@@ -34,7 +37,11 @@ describe('VendorsService', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [VendorsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        VendorsService,
+        { provide: PrismaService, useValue: prisma },
+        ...infraProviders((cache = cacheServiceMock()), (events = eventEmitterMock())),
+      ],
     }).compile();
     service = module.get(VendorsService);
   });
@@ -172,6 +179,107 @@ describe('VendorsService', () => {
     it('deletes it', async () => {
       await expect(service.remove('v1')).resolves.toEqual(VENDOR);
       expect(prisma.vendor.delete).toHaveBeenCalledWith({ where: { id: 'v1' } });
+    });
+  });
+
+  describe('findAll (public directory)', () => {
+    // Regression guard. The isApproved filter was declared as a local and never
+    // passed to the query, so the directory listed unapproved vendors and the
+    // total counted them. Asserting on the arguments is the only way to catch
+    // that - a mocked findMany returns rows whatever the where clause says.
+    it('filters the page to approved vendors', async () => {
+      await service.findAll({ page: 1, limit: 20, sortBy: 'createdAt', order: 'desc' } as FindVendorsQueryDto);
+
+      expect(prisma.vendor.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { isApproved: true } }),
+      );
+    });
+
+    it('applies the same filter to the count, so pagination has no phantom pages', async () => {
+      await service.findAll({ page: 1, limit: 20, sortBy: 'createdAt', order: 'desc' } as FindVendorsQueryDto);
+
+      expect(prisma.vendor.count).toHaveBeenCalledWith({ where: { isApproved: true } });
+    });
+
+    it('reads the page through the cache', async () => {
+      await service.findAll({ page: 1, limit: 20, sortBy: 'createdAt', order: 'desc' } as FindVendorsQueryDto);
+
+      expect(cache.wrapList).toHaveBeenCalledWith(
+        'vendors',
+        expect.objectContaining({ page: 1, limit: 20 }),
+        expect.any(Number),
+        expect.any(Function),
+      );
+    });
+
+    it('only lists and counts approved vendors', async () => {
+    await service.findAll({ page: 1, limit: 10, sortBy: 'createdAt', order: 'desc' } as any);
+
+    expect(prisma.vendor.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { isApproved: true } }),
+    );
+    expect(prisma.vendor.count).toHaveBeenCalledWith({ where: { isApproved: true } });
+  });
+
+  });
+
+  describe('approve', () => {
+    it('emits vendor.approved with the owner, so the owner can be notified', async () => {
+      prisma.vendor.findUnique.mockResolvedValue({ ...VENDOR, isApproved: false });
+      prisma.vendor.update.mockResolvedValue({ ...VENDOR, isApproved: true });
+
+      await service.approve('v1');
+
+      expect(events.emit).toHaveBeenCalledWith(
+        'vendor.approved',
+        expect.objectContaining({ vendorId: 'v1', ownerId: 'u1' }),
+      );
+    });
+
+    it('sets approvedAt', async () => {
+      prisma.vendor.findUnique.mockResolvedValue({ ...VENDOR, isApproved: false });
+
+      await service.approve('v1');
+
+      expect(prisma.vendor.update.mock.calls[0][0].data.approvedAt).toBeInstanceOf(Date);
+    });
+
+    // Idempotent: an admin double-clicking must not move approvedAt or re-send
+    // the approval email.
+    it('emits nothing and writes nothing when already approved', async () => {
+      prisma.vendor.findUnique.mockResolvedValue({ ...VENDOR, isApproved: true });
+
+      await service.approve('v1');
+
+      expect(prisma.vendor.update).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('invalidates both listings so the vendor and its products appear', async () => {
+      prisma.vendor.findUnique.mockResolvedValue({ ...VENDOR, isApproved: false });
+
+      await service.approve('v1');
+
+      expect(cache.invalidate).toHaveBeenCalledWith('vendors');
+      expect(cache.invalidate).toHaveBeenCalledWith('products');
+    });
+  });
+
+  describe('revokeApproval', () => {
+    it('clears the flag and the timestamp', async () => {
+      await service.revokeApproval('v1');
+
+      expect(prisma.vendor.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { isApproved: false, approvedAt: null } }),
+      );
+    });
+
+    // The storefront must disappear now, not when a 60 second ttl lapses.
+    it('invalidates both listings immediately', async () => {
+      await service.revokeApproval('v1');
+
+      expect(cache.invalidate).toHaveBeenCalledWith('vendors');
+      expect(cache.invalidate).toHaveBeenCalledWith('products');
     });
   });
 });

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, IsEnum, IsArray } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsEnum, IsArray, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Segment } from '../../../generated/prisma/enums';
 import { Transform } from 'class-transformer';
@@ -18,7 +18,7 @@ export class FindProductsQueryDto extends PaginationQueryDto {
     @IsString()
     categoryId?: string;
 
-        @ApiPropertyOptional({
+    @ApiPropertyOptional({
         enum: Segment,
         isArray: true,
         description: 'Repeat the key to widen: ?segments=PET&segments=LIVESTOCK matches either',
@@ -40,4 +40,13 @@ export class FindProductsQueryDto extends PaginationQueryDto {
     @IsOptional()
     @IsIn(PRODUCT_SORT_FIELDS)
     sortBy: ProductSortField = 'createdAt';
+
+    @ApiPropertyOptional({
+        description: 'Free-text search across product name and description',
+        example: 'ginger',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    q?: string;
 }

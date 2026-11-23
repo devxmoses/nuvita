@@ -28,22 +28,22 @@ export class CartsController {
     return this.cartsService.addItem(req.user.id, addCartItemDto)
   }
 
-  @ApiOperation({ summary: 'Set the exact quantity of a product in your cart' })
-  @ApiParam({ name: 'productId' })
+  @ApiOperation({ summary: 'Set the exact quantity of a cart line' })
+  @ApiParam({ name: 'itemId', description: 'The cart item id, from GET /cart' })
   @ApiResponse({ status: 200, description: 'Cart item quantity updated' })
-  @ApiResponse({ status: 404, description: 'That product is not in your cart' })
-  @Patch('items/:productId')
-  updateItem(@Request() req, @Param('productId') productId:string,@Body() updateCartItemDto:UpdateCartItemDto){
-    return this.cartsService.updateItem(req.user.id,productId, updateCartItemDto)
+  @ApiResponse({ status: 404, description: 'That item is not in your cart' })
+  @Patch('items/:itemId')
+  updateItem(@Request() req, @Param('itemId') itemId:string,@Body() updateCartItemDto:UpdateCartItemDto){
+    return this.cartsService.updateItem(req.user.id,itemId, updateCartItemDto)
   }
 
-  @ApiOperation({ summary: 'Remove a product from your cart' })
-  @ApiParam({ name: 'productId' })
+  @ApiOperation({ summary: 'Remove a line from your cart' })
+  @ApiParam({ name: 'itemId', description: 'The cart item id, from GET /cart' })
   @ApiResponse({ status: 200, description: 'Cart item removed' })
-  @ApiResponse({ status: 404, description: 'That product is not in your cart' })
-  @Delete('items/:productId')
-  removeItem(@Request() req, @Param('productId') productId:string){
-    return this.cartsService.removeItem(req.user.id, productId);
+  @ApiResponse({ status: 404, description: 'That item is not in your cart' })
+  @Delete('items/:itemId')
+  removeItem(@Request() req, @Param('itemId') itemId:string){
+    return this.cartsService.removeItem(req.user.id, itemId);
   }
 
   @ApiOperation({ summary: 'Empty your cart' })
