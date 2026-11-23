@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { infraProviders } from '../common/testing/infra-test-providers';
 
 describe('ProductsController', () => {
   let controller: ProductsController;
@@ -22,7 +23,8 @@ describe('ProductsController', () => {
               delete: jest.fn(),
             }
           }
-        }
+        },
+        ...infraProviders(),
       ],
     }).compile();
 

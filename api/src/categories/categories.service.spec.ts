@@ -13,7 +13,8 @@ describe('CategoriesService', () => {
       findUnique: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
-    }
+    };
+    $queryRaw: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -24,7 +25,10 @@ describe('CategoriesService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
-      }
+      },
+      // the ancestor walk used to reject a cycle. The default answers with the
+      // proposed parent alone, i.e. a parent with no ancestors of its own.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'parent-1' }]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -42,6 +46,54 @@ describe('CategoriesService', () => {
 
   afterEach(()=>{
     jest.clearAllMocks();
+  });
+
+  describe('update - cycle prevention', () => {
+    // A -> B -> A would close the tree into a ring, and the product filter walks
+    // this tree, so the write has to be refused before it happens.
+    it('refuses to move a category under its own descendant', async () => {
+      prisma.category.findUnique.mockResolvedValue({ id: 'a', name: 'Dog Food' });
+      // the proposed parent 'b' has 'a' among its ancestors
+      prisma.$queryRaw.mockResolvedValue([{ id: 'b' }, { id: 'a' }]);
+
+      await expect(service.update('a', { parentId: 'b' })).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.update('a', { parentId: 'b' })).rejects.toThrow(
+        /descendant/i,
+      );
+
+      expect(prisma.category.update).not.toHaveBeenCalled();
+    });
+
+    it('allows a move to an unrelated branch', async () => {
+      prisma.category.findUnique.mockResolvedValue({ id: 'a', name: 'Dog Food' });
+      prisma.$queryRaw.mockResolvedValue([{ id: 'b' }, { id: 'root' }]);
+
+      await service.update('a', { parentId: 'b' });
+
+      expect(prisma.category.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'a' } }),
+      );
+    });
+
+    it('does not walk ancestors when the parent is not changing', async () => {
+      prisma.category.findUnique.mockResolvedValue({ id: 'a', name: 'Dog Food' });
+
+      await service.update('a', { name: 'Dog Food & Treats' });
+
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a category as its own parent, without a query', async () => {
+      prisma.category.findUnique.mockResolvedValue({ id: 'a', name: 'Dog Food' });
+
+      await expect(service.update('a', { parentId: 'a' })).rejects.toThrow(
+        BadRequestException,
+      );
+
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
   });
 
   describe('create',()=>{

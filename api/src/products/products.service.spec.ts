@@ -4,10 +4,12 @@ import { ProductsService } from './products.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FindProductsQueryDto } from './dto/find-products-query.dto';
 import { Segment } from '../../generated/prisma/enums';
+import { cacheServiceMock, infraProviders } from '../common/testing/infra-test-providers';
 
 describe('ProductsService', () => {
   let service: ProductsService;
   let prisma: any;
+  let cache: ReturnType<typeof cacheServiceMock>;
 
   const PRODUCT = {
     id: 'p1', name: 'Cold Pressed Ginger Shot 250ml', slug: 'cold-pressed-ginger-shot-250ml',
@@ -24,11 +26,12 @@ describe('ProductsService', () => {
         create: jest.fn().mockResolvedValue(PRODUCT),
         findMany: jest.fn().mockResolvedValue([PRODUCT]),
         findUnique: jest.fn().mockResolvedValue(PRODUCT),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ segments: [Segment.HUMAN] }),
         update: jest.fn().mockResolvedValue(PRODUCT),
         delete: jest.fn().mockResolvedValue(PRODUCT),
         count: jest.fn().mockResolvedValue(1),
       },
-      category: { findUnique: jest.fn().mockResolvedValue({ id: 'c1', name: 'Beverages' }) },
+      category: { findUnique: jest.fn().mockResolvedValue({ id: 'c1', name: 'Beverages', segments: [] }) },
       // mirror Prisma: `in` returns a row for each id that exists. The default
       // echoes every requested id back, so tests opt in to a missing one.
       species: {
@@ -39,10 +42,17 @@ describe('ProductsService', () => {
       // the array form of $transaction: Prisma runs the operations it is handed
       // in one transaction, so the page and the count see the same snapshot
       $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+      // the recursive subtree query. The default answers with the requested root
+      // alone, so a test only overrides it when it cares about descendants.
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'c1' }]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [ProductsService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: prisma },
+        ...infraProviders((cache = cacheServiceMock())),
+      ],
     }).compile();
     service = module.get(ProductsService);
   });
@@ -208,7 +218,7 @@ describe('ProductsService', () => {
       await service.findAll(query({ vendorId: 'v1' }));
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { vendorId: 'v1' } }),
+        expect.objectContaining({ where: expect.objectContaining({ vendorId: 'v1' }) }),
       );
     });
 
@@ -216,7 +226,47 @@ describe('ProductsService', () => {
       await service.findAll(query({ categoryId: 'c1' }));
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { categoryId: 'c1' } }),
+        expect.objectContaining({ where: expect.objectContaining({ categoryId: { in: ['c1'] } }) }),
+      );
+    });
+
+    // picking Dog Food must include Dog Food > Puppy Food, or a top-level
+    // choice hides most of what is actually under it
+    it('includes the whole subtree of the chosen category', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }]);
+
+      await service.findAll(query({ categoryId: 'c1' }));
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ categoryId: { in: ['c1', 'c2', 'c3'] } }),
+        }),
+      );
+    });
+
+    it('counts against the subtree, not the single category', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
+
+      await service.findAll(query({ categoryId: 'c1' }));
+
+      expect(prisma.product.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({ categoryId: { in: ['c1', 'c2'] } }),
+      });
+    });
+
+    it('does not run the subtree query when no category is given', async () => {
+      await service.findAll(query());
+
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('matches nothing for a category id that does not exist', async () => {
+      prisma.$queryRaw.mockResolvedValue([]);
+
+      await service.findAll(query({ categoryId: 'ghost' }));
+
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ categoryId: { in: [] } }) }),
       );
     });
 
@@ -224,7 +274,9 @@ describe('ProductsService', () => {
       await service.findAll(query({ vendorId: 'v1', categoryId: 'c1' }));
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { vendorId: 'v1', categoryId: 'c1' } }),
+        expect.objectContaining({
+          where: expect.objectContaining({ vendorId: 'v1', categoryId: { in: ['c1'] } }),
+        }),
       );
     });
 
@@ -232,14 +284,16 @@ describe('ProductsService', () => {
       await service.findAll(query());
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: {} }),
+        expect.objectContaining({ where: expect.objectContaining({ isActive: true, vendor: { isApproved: true } }) }),
       );
     });
 
     it('counts against the same filter as the page', async () => {
       await service.findAll(query({ vendorId: 'v1' }));
 
-      expect(prisma.product.count).toHaveBeenCalledWith({ where: { vendorId: 'v1' } });
+      expect(prisma.product.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({ vendorId: 'v1' }),
+      });
     });
 
     it('translates page and limit into skip and take', async () => {
@@ -287,7 +341,7 @@ describe('ProductsService', () => {
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { segments: { hasSome: [Segment.PET, Segment.HUMAN] } },
+          where: expect.objectContaining({ segments: { hasSome: [Segment.PET, Segment.HUMAN] } }),
         }),
       );
     });
@@ -308,7 +362,7 @@ describe('ProductsService', () => {
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { segments: { hasSome: [Segment.POULTRY] } },
+          where: expect.objectContaining({ segments: { hasSome: [Segment.POULTRY] } }),
         }),
       );
     });
@@ -324,7 +378,7 @@ describe('ProductsService', () => {
       await service.findAll(query({ segments: [] }));
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: {} }),
+        expect.objectContaining({ where: expect.objectContaining({ isActive: true, vendor: { isApproved: true } }) }),
       );
     });
 
@@ -332,7 +386,9 @@ describe('ProductsService', () => {
       await service.findAll(query({ speciesId: 's1' }));
 
       expect(prisma.product.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { species: { some: { id: 's1' } } } }),
+        expect.objectContaining({
+          where: expect.objectContaining({ species: { some: { id: 's1' } } }),
+        }),
       );
     });
 
@@ -342,11 +398,11 @@ describe('ProductsService', () => {
       );
 
       expect(prisma.product.count).toHaveBeenCalledWith({
-        where: {
+        where: expect.objectContaining({
           vendorId: 'v1',
           segments: { hasSome: [Segment.PET] },
           species: { some: { id: 's1' } },
-        },
+        }),
       });
     });
 
@@ -421,6 +477,65 @@ describe('ProductsService', () => {
     it('deletes it', async () => {
       await expect(service.remove('p1')).resolves.toEqual(PRODUCT);
       expect(prisma.product.delete).toHaveBeenCalledWith({ where: { id: 'p1' } });
+    });
+  });
+
+  describe('caching', () => {
+    it('reads the listing through the cache, keyed by the whole query', async () => {
+      await service.findAll({
+        page: 1, limit: 20, sortBy: 'createdAt', order: 'desc', q: 'ginger',
+      } as FindProductsQueryDto);
+
+      expect(cache.wrapList).toHaveBeenCalledWith(
+        'products',
+        expect.objectContaining({ page: 1, limit: 20, q: 'ginger' }),
+        expect.any(Number),
+        expect.any(Function),
+      );
+    });
+
+    // A new product can land on any cached page of any filter combination, so the
+    // namespace is invalidated wholesale rather than guessing which keys matter.
+    it('invalidates the namespace after a create', async () => {
+      await service.create(BASE);
+
+      expect(cache.invalidate).toHaveBeenCalledWith('products');
+    });
+
+    it('invalidates after an update', async () => {
+      await service.update('p1', { price: 5999 });
+
+      expect(cache.invalidate).toHaveBeenCalledWith('products');
+    });
+
+    it('invalidates after a delete', async () => {
+      await service.remove('p1');
+
+      expect(cache.invalidate).toHaveBeenCalledWith('products');
+    });
+
+    // The write must happen first; invalidating before it would reopen a window
+    // where the old value is cached again from a concurrent read.
+    it('invalidates after the write, not before', async () => {
+      const order: string[] = [];
+      prisma.product.create.mockImplementation(async () => {
+        order.push('write');
+        return PRODUCT;
+      });
+      cache.invalidate.mockImplementation(async () => {
+        order.push('invalidate');
+      });
+
+      await service.create(BASE);
+
+      expect(order).toEqual(['write', 'invalidate']);
+    });
+
+    it('does not invalidate when the create is rejected', async () => {
+      prisma.category.findUnique.mockResolvedValue(null);
+
+      await expect(service.create({ ...BASE, categoryId: 'missing' })).rejects.toThrow();
+      expect(cache.invalidate).not.toHaveBeenCalled();
     });
   });
 });

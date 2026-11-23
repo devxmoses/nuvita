@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { slugify } from '../common/utils/slugify';
@@ -6,6 +6,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FindProductsQueryDto } from './dto/find-products-query.dto';
 import { paginate } from '../common/dto/paginated';
 import { expandSegments } from './segment-hierarchy';
+import { Segment } from '../../generated/prisma/enums';
+
 
 @Injectable()
 export class ProductsService {
@@ -28,6 +30,38 @@ export class ProductsService {
       throw new NotFoundException(`Species not found: ${missing.join(', ')}`);
     }
   }
+  private async descendantCategoryIds(rootId:string):Promise<string[]>{
+    const rows = await this.prisma.$queryRaw<{id:string}[]>`
+      WITH RECURSIVE subtree AS (
+        SELECT "id" FROM "Category" WHERE "id" = ${rootId}
+        UNION
+        SELECT c."id" FROM "Category" c
+        JOIN subtree s ON c."parentId" = s."id"
+      )
+      SELECT "id" FROM subtree
+    `;
+
+    return rows.map((row)=>row.id);
+  }
+
+  private assertSegmentsFitCategory(
+    categorySegments:Segment[],
+    productSegments:Segment[],
+    categoryName:string,
+  ){
+    if(categorySegments.length === 0) return;
+
+    const allowed = new Set(categorySegments);
+    const offending = productSegments.filter((segment)=>!allowed.has(segment));
+
+    if(offending.length){
+      throw new BadRequestException(
+        `Category "${categoryName}" only accepts ${categorySegments.join(', ')} ` +
+        `products; got ${offending.join(', ')}`,
+      );
+    }
+  }
+
 
   async create(createProductDto:CreateProductDto){
     const slug = slugify(createProductDto.slug??createProductDto.name);
@@ -65,12 +99,25 @@ export class ProductsService {
 
 
   async findAll(query:FindProductsQueryDto){
-    const {page, limit, sortBy, order, vendorId, categoryId, segments, speciesId} = query;
+    const {page, limit, sortBy, order, vendorId, categoryId, segments, speciesId, q} = query;
+    
+    const categoryIds = categoryId
+      ? await this.descendantCategoryIds(categoryId)
+      : undefined;
+    
     const where = {
+      isActive:true,
+      vendor:{isApproved:true},
       ...(vendorId?{vendorId}:{}),
-      ...(categoryId ? {categoryId} : {}),
+      ...(categoryId ? {categoryId:{in:categoryIds}} : {}),
       ...(segments?.length ? {segments:{hasSome:expandSegments(segments)}} : {}),
       ...(speciesId ? {species:{some:{id:speciesId}}} : {}),
+       ...(q?.trim()
+        ? {OR:[
+            {name:{contains:q.trim(), mode:'insensitive' as const}},
+            {description:{contains:q.trim(), mode:'insensitive' as const}},
+          ]}
+        : {}),
     }
 
     const [data, total] = await this.prisma.$transaction([
@@ -104,6 +151,15 @@ export class ProductsService {
           `Category with ID ${updateProductDto.categoryId} not found`
         )
       }
+       const existing = await this.prisma.product.findUniqueOrThrow({
+        where:{id},
+        select:{segments:true},
+      });
+      this.assertSegmentsFitCategory(
+        category.segments,
+        updateProductDto.segments ?? existing.segments,
+        category.name,
+      );
     }
 
     const {slug,speciesIds, ...rest} = updateProductDto;

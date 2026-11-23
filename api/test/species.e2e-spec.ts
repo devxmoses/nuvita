@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AuthService } from '../src/auth/auth.service';
 import { ThrottlerStorage } from '@nestjs/throttler';
+import { resetThrottler } from './reset-throttler';
 import { configureApp } from '../src/app.setup';
 
 describe('Species (e2e)', () => {
@@ -47,7 +48,7 @@ describe('Species (e2e)', () => {
     // POST /species is throttled to 5/hour and the throttler keys on IP, so
     // every request in this file shares one bucket. Without clearing it the
     // suite starts 429ing partway down - which says nothing about the code.
-    throttlerStorage?._storage?.clear?.();
+    resetThrottler(throttlerStorage);
   });
 
   const seedUser = async (over: Record<string, unknown> = {}) => {
@@ -358,6 +359,12 @@ describe('Species (e2e)', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({ name: `Canine Nutrition ${(seq += 1)}` })
         .expect(201);
+
+      // the product listing this test counts through is approved-vendors-only
+      await prisma.vendor.update({
+        where: { id: vendor.body.id },
+        data: { isApproved: true, approvedAt: new Date() },
+      });
 
       const make = async (name: string, speciesIds: string[]) => {
         const res = await http()

@@ -1,5 +1,6 @@
-import { IsOptional, IsString, Matches, MinLength } from "class-validator";
+import { ArrayUnique, IsArray, IsEnum, IsOptional, IsString, Matches, MinLength } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Segment } from '../../../generated/prisma/enums';
 
 export class CreateCategoryDto {
     @ApiProperty({ example: 'Beverages', minLength: 2 })
@@ -19,4 +20,18 @@ export class CreateCategoryDto {
     @IsOptional()
     @IsString()
     parentId?:string
+
+    @ApiPropertyOptional({
+        enum: Segment,
+        isArray: true,
+        example: [Segment.PET],
+        description:
+            'Which segments this category belongs to. Omit or leave empty for a ' +
+            'category that spans all of them, like Supplements.',
+    })
+    @IsOptional()
+    @IsArray()
+    @ArrayUnique()
+    @IsEnum(Segment, { each: true })
+    segments?: Segment[]
 }

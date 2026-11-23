@@ -7,6 +7,21 @@ import { PrismaService } from '../prisma/prisma.service';
 export class CategoriesService {
   constructor(private readonly prisma:PrismaService){}
 
+  private async ancestorCategoryIds(startId:string):Promise<string[]>{
+    const rows = await this.prisma.$queryRaw<{id:string}[]>`
+      WITH RECURSIVE ancestors AS (
+        SELECT "id", "parentId" FROM "Category" WHERE "id" = ${startId}
+        UNION
+        SELECT c."id", c."parentId" FROM "Category" c
+        JOIN ancestors a ON c."id" = a."parentId"
+      )
+      SELECT "id" FROM ancestors
+    `;
+
+    return rows.map((row)=>row.id);
+  }
+
+
   async create(createCategoryDto: CreateCategoryDto) {
     const slug = slugify(createCategoryDto.slug ?? createCategoryDto.name);
 
@@ -47,7 +62,17 @@ export class CategoriesService {
       }
       const parent = await this.prisma.category.findUnique({ where:{id: updateCategoryDto.parentId}})
       if(!parent) throw new NotFoundException(`Parent category with ID ${updateCategoryDto.parentId} not found`)
+      const ancestorIds = await this.ancestorCategoryIds(updateCategoryDto.parentId);
+      if(ancestorIds.includes(id)){
+        throw new BadRequestException(
+          'A category cannot be moved under one of its own descendants',
+        )
+      }
     };
+    
+
+     
+
 
     const {slug, ...rest} = updateCategoryDto;
     return this.prisma.category.update({
